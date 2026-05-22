@@ -1,0 +1,20 @@
+[project]
+name = "computational-imaging"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "ipykernel>=7.2.0",
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.9",
+    "numba>=0.65.1",
+    "numpy>=2.4.6",
+    "pandas>=3.0.3",
+    "pillow>=12.2.0",
+    "scikit-image>=0.26.0",
+    "scikit-learn>=1.8.0",
+    "scipy>=1.17.1",
+    "torch>=2.12.0",
+    "torchvision>=0.27.0",
+]
