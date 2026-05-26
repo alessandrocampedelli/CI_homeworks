@@ -1,19 +1,48 @@
 # %% [markdown]
 # # Homework 1: End-to-End Reconstruction Before Generative Models
 # 
-# **Setup for Local Execution:**
-# Since you are running this locally inside the `hm2` folder,
-# we append `..` to the system path so Python can find the `IPPy` module.
-# The dataset is also located locally in `./Mayo`.
+# **Setup for Google Colab:**
+# Run this cell to install dependencies and download the IPPy library.
+# The dataset is assumed to be in the same folder as the notebook (`./Mayo`).
 
 # %%
 import os
 import sys
-
-sys.path.append('..')
-mayo_dataset_path = './Mayo'
-
 import glob
+
+# Colab Setup: Install required package and clone repo for IPPy
+try:
+    import google.colab
+    IN_COLAB = True
+except ImportError:
+    IN_COLAB = False
+
+if IN_COLAB:
+    print("Configuring Google Colab environment...")
+    
+    # Mount Google Drive to access the dataset
+    from google.colab import drive
+    drive.mount('/content/drive')
+    
+    # Unzip the dataset from Drive to Colab's fast local storage
+    if not os.path.exists('/content/Mayo'):
+        print("Extracting dataset from Google Drive...")
+        os.system('unzip -q /content/drive/MyDrive/homeworks_CI/Mayo.zip -d /content/')
+    
+    # Install dependencies and clone repo
+    os.system('pip install astra-toolbox')
+    if not os.path.exists('CI_homeworks'):
+        os.system('git clone https://github.com/alessandrocampedelli/CI_homeworks.git')
+    sys.path.append('CI_homeworks')
+    
+    # Path to the dataset in fast local storage
+    mayo_dataset_path = '/content/Mayo'
+else:
+    # Local setup
+    sys.path.append('..')
+    mayo_dataset_path = './Mayo'
+
+# %%
 import math
 from pathlib import Path
 
@@ -31,8 +60,14 @@ from IPPy import operators, utilities
 from IPPy.utilities import metrics
 
 book_root = Path('.').resolve()
-weights_dir = book_root / 'weights'
-weights_dir.mkdir(exist_ok=True)
+
+# Create directory for saving weights if it doesn't exist
+if IN_COLAB:
+    # Save weights directly to your Google Drive so you never lose them
+    weights_dir = Path('/content/drive/MyDrive/homeworks_CI/weights')
+else:
+    weights_dir = book_root / 'weights'
+weights_dir.mkdir(parents=True, exist_ok=True)
 
 device = utilities.get_device()
 torch.manual_seed(0)
@@ -238,16 +273,32 @@ print(f"SimpleCNN parameters: {count_parameters(model_simple)}")
 print(f"ResCNN parameters: {count_parameters(model_res)}")
 print(f"UNet parameters: {count_parameters(model_unet)}")
 
+# Define paths for saving/loading weights
+simple_weights_path = weights_dir / 'SimpleCNN.pth'
+res_weights_path = weights_dir / 'ResCNN.pth'
+unet_weights_path = weights_dir / 'UNet.pth'
 
 # %% [markdown]
 # ## Part 3: Training, Saving, and Evaluating the Models
 
 # %%
-def train_model(model, train_loader, K, weights_path, num_epochs=20, noise_level=0.05, lr=1e-3):
+def train_model(model, train_loader, K, weights_path, num_epochs=20, noise_level=0.05, lr=1e-3, resume=True):
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     loss_fn = nn.MSELoss()
     history = []
+    
+    start_epoch = 0
+    checkpoint_path = Path(str(weights_path) + ".checkpoint.pth")
+    
+    if resume and checkpoint_path.exists():
+        print(f"Resuming {model.__class__.__name__} from checkpoint...")
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_epoch = checkpoint['epoch'] + 1
+        history = checkpoint.get('loss_history', [])
+        print(f"Resumed at epoch {start_epoch}/{num_epochs}")
     
     # If there's no data (e.g. invalid path), skip training
     if not train_loader:
@@ -257,7 +308,7 @@ def train_model(model, train_loader, K, weights_path, num_epochs=20, noise_level
     model.train()
     
     # Iterate over epochs
-    for epoch in range(num_epochs):
+    for epoch in range(start_epoch, num_epochs):
         epoch_loss = 0.0
         
         # Use tqdm on batches so progress is visible
@@ -286,16 +337,19 @@ def train_model(model, train_loader, K, weights_path, num_epochs=20, noise_level
             
         avg_loss = epoch_loss / len(train_loader)
         history.append(avg_loss)
-        # print(f"Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.6f}")
         
-    # Save weights
-    torch.save(model.state_dict(), weights_path)
+        # Save checkpoint at the end of each epoch
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'loss_history': history
+        }, checkpoint_path)
+        
+        # Also update the standard weights file
+        torch.save(model.state_dict(), weights_path)
+        
     return history
-
-# Define paths for saving weights
-simple_weights_path = weights_dir / 'SimpleCNN.pth'
-res_weights_path = weights_dir / 'ResCNN.pth'
-unet_weights_path = weights_dir / 'UNet.pth'
 
 # Note: Training may take time on CPU. You might want to reduce num_epochs if strictly testing.
 num_epochs = 20
@@ -349,8 +403,8 @@ if len(test_loader) > 0:
         pred_res = model_res(test_corrupted)
         pred_unet = model_unet(test_corrupted)
         
-    # Visual comparison using IPPy show function
-    images_to_show = [test_clean, test_corrupted, pred_simple, pred_res, pred_unet]
+    # Visual comparison using IPPy show function (ensure tensors are on CPU)
+    images_to_show = [img.cpu().detach() for img in [test_clean, test_corrupted, pred_simple, pred_res, pred_unet]]
     titles = ["Ground Truth", "Corrupted Input", "SimpleCNN", "ResCNN", "UNet"]
     utilities.show(images_to_show, title=titles)
     
@@ -363,7 +417,8 @@ if len(test_loader) > 0:
     
     loss_fn = nn.MSELoss()
     
-    for clean_x in test_loader:
+    test_iter = tqdm(test_loader, desc="Evaluating on Test Set")
+    for clean_x in test_iter:
         clean_x = clean_x.to(device)
         corr_noiseless = K(clean_x)
         noise = utilities.gaussian_noise(corr_noiseless, noise_level=0.05)
