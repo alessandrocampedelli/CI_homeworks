@@ -33,8 +33,9 @@ if IN_COLAB:
         os.system('unzip -q /content/drive/MyDrive/homeworks_CI/Mayo.zip -d /content/')
     
     # Install dependencies and clone repo
+    os.system('pip install astra-toolbox')
     if not os.path.exists('CI_homeworks'):
-        os.system('git clone https://github.com/alessandrocampedelli/CI_homeworks.git')
+        os.system('git clone -b hm3 https://github.com/alessandrocampedelli/CI_homeworks.git')
     sys.path.append('CI_homeworks')
     
     # Path to the dataset in fast local storage
